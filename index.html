@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Emotion x Spotify</title>
+  <style>
+    :root {
+      --bg1: #f2efe7;
+      --bg2: #dceefb;
+      --ink: #1a1c22;
+      --card: #ffffffd8;
+      --accent: #1db954;
+      --muted: #4b5563;
+    }
+    body {
+      margin: 0;
+      font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+      color: var(--ink);
+      background: radial-gradient(1200px 500px at 10% -10%, #fff9cf 0%, transparent 60%),
+                  radial-gradient(900px 500px at 90% 0%, #d6f6ff 0%, transparent 60%),
+                  linear-gradient(145deg, var(--bg1), var(--bg2));
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1000px; margin: 24px auto; padding: 0 16px 30px; }
+    .hero {
+      background: var(--card);
+      border: 1px solid #fff;
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 12px 30px #00000014;
+    }
+    .hero h1 { margin: 0 0 12px; font-size: 26px; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .badge {
+      border-radius: 999px;
+      background: #0f172a;
+      color: #fff;
+      padding: 6px 12px;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .badge.green { background: var(--accent); color: #062a11; }
+    .small { color: var(--muted); font-size: 14px; }
+    .grid { margin-top: 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 12px;
+      border: 1px solid #eef2f7;
+      box-shadow: 0 6px 18px #00000010;
+    }
+    .btn {
+      display: inline-block;
+      text-decoration: none;
+      background: #0f172a;
+      color: #fff;
+      padding: 8px 12px;
+      border: 0;
+      border-radius: 10px;
+      font-size: 14px;
+      margin-right: 8px;
+      margin-top: 4px;
+      cursor: pointer;
+    }
+    .btn.spotify { background: var(--accent); color: #05210d; font-weight: 700; }
+    .input {
+      width: min(100%, 560px);
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 14px;
+    }
+    canvas { width: 100%; max-width: 500px; border-radius: 10px; margin-top: 12px; display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>手機攝像頭情緒辨識 + Spotify 推薦</h1>
+      <div class="small">先部署後端到 Render，將 API 網址貼在下方（例如 https://your-app.onrender.com）。</div>
+      <div style="margin-top:10px;">
+        <input id="api-base" class="input" placeholder="https://your-render-service.onrender.com" />
+        <button id="save-api" class="btn">儲存 API 網址</button>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button id="start-camera" class="btn spotify" type="button">啟動手機攝像頭</button>
+        <button id="stop-camera" class="btn" type="button" style="display:none; background:#dc2626;">關閉攝像頭</button>
+        <span class="badge">主情緒：<span id="emotion">unknown</span></span>
+        <span class="badge green">信心：<span id="confidence">0.0%</span></span>
+      </div>
+      <div id="status" class="small" style="margin-top:8px;"></div>
+      <canvas id="camera-canvas"></canvas>
+    </section>
+
+    <section class="grid" id="spotify-grid" style="margin-top:16px;"></section>
+  </div>
+
+  <script>
+    const emotionQueries = {
+      happiness: ["happy upbeat pop", "k-pop", "mandopop", "afrobeats"],
+      sadness: ["sad ballad", "lofi hip hop", "indie folk", "classical piano"],
+      anger: ["rock metal", "hip hop rap", "punk rock", "heavy music"],
+      disgust: ["grunge alternative", "industrial metal", "post-punk", "experimental"],
+      fear: ["ambient dark", "post-rock", "neoclassical", "trip hop"],
+      contempt: ["jazz fusion", "neo soul", "indie french", "sophisticated"],
+      uncertain: ["lo-fi chill", "instrumental", "ambient relaxing"],
+      unknown: ["world music", "jazz", "indie"]
+    };
+
+    const startBtn = document.getElementById("start-camera");
+    const stopBtn = document.getElementById("stop-camera");
+    const canvas = document.getElementById("camera-canvas");
+    const statusDiv = document.getElementById("status");
+    const emotionText = document.getElementById("emotion");
+    const confidenceText = document.getElementById("confidence");
+    const spotifyGrid = document.getElementById("spotify-grid");
+    const apiBaseInput = document.getElementById("api-base");
+    const saveApiBtn = document.getElementById("save-api");
+
+    let stream = null;
+    let video = null;
+    let timer = null;
+
+    function getApiBase() {
+      return (localStorage.getItem("emotion_api_base") || "").trim();
+    }
+
+    function setApiBase(value) {
+      localStorage.setItem("emotion_api_base", value.trim().replace(/\/$/, ""));
+    }
+
+    function renderSpotify(emotion) {
+      const queries = emotionQueries[emotion] || emotionQueries.unknown;
+      spotifyGrid.innerHTML = "";
+      for (const q of queries) {
+        const card = document.createElement("article");
+        card.className = "card";
+        card.innerHTML = `
+          <p><strong>${q}</strong></p>
+          <a class="btn spotify" target="_blank" rel="noopener" href="https://open.spotify.com/search/${encodeURIComponent(q)}">在 Spotify 搜尋</a>
+        `;
+        spotifyGrid.appendChild(card);
+      }
+    }
+
+    async function detectOnce() {
+      const base = getApiBase();
+      if (!base) {
+        statusDiv.textContent = "請先填入 Render API 網址";
+        return;
+      }
+
+      const ctx = canvas.getContext("2d");
+      canvas.width = video.videoWidth || 320;
+      canvas.height = video.videoHeight || 240;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+      const resp = await fetch(base + "/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ frame: dataUrl })
+      });
+
+      if (!resp.ok) {
+        const txt = await resp.text();
+        throw new Error("API 錯誤: " + txt);
+      }
+
+      const data = await resp.json();
+      const emo = data.dominant_emotion || "unknown";
+      const conf = Number(data.confidence || 0) * 100;
+      emotionText.textContent = emo;
+      confidenceText.textContent = conf.toFixed(1) + "%";
+      renderSpotify(emo);
+    }
+
+    saveApiBtn.addEventListener("click", () => {
+      setApiBase(apiBaseInput.value);
+      statusDiv.textContent = "API 網址已儲存";
+    });
+
+    startBtn.addEventListener("click", async () => {
+      try {
+        statusDiv.textContent = "申請攝像頭權限中...";
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+        video = document.createElement("video");
+        video.srcObject = stream;
+        await video.play();
+
+        canvas.style.display = "block";
+        startBtn.style.display = "none";
+        stopBtn.style.display = "inline-block";
+        statusDiv.textContent = "攝像頭啟動成功，開始偵測...";
+
+        timer = setInterval(async () => {
+          try {
+            await detectOnce();
+          } catch (err) {
+            statusDiv.textContent = err.message;
+          }
+        }, 800);
+      } catch (err) {
+        statusDiv.textContent = "攝像頭失敗: " + err.message;
+      }
+    });
+
+    stopBtn.addEventListener("click", () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+      canvas.style.display = "none";
+      startBtn.style.display = "inline-block";
+      stopBtn.style.display = "none";
+      statusDiv.textContent = "已停止偵測";
+    });
+
+    apiBaseInput.value = getApiBase();
+    renderSpotify("unknown");
+  </script>
+</body>
+</html>
